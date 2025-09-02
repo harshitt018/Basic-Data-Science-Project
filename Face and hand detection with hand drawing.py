@@ -1,136 +1,169 @@
-# Import required libraries
 import cv2
 import mediapipe as mp
 import numpy as np
 import warnings
 import time
 import math
+import os
 
-# Suppress specific UserWarning
 warnings.filterwarnings("ignore", category=UserWarning, module='google.protobuf')
 
-# Initializing MediaPipe 
 mp_hands = mp.solutions.hands
-hands = mp_hands.Hands(static_image_mode=False, max_num_hands=2, min_detection_confidence=0.7, min_tracking_confidence=0.5)
+hands = mp_hands.Hands(static_image_mode=False, max_num_hands=1, min_detection_confidence=0.7, min_tracking_confidence=0.5)
 mp_drawing = mp.solutions.drawing_utils
-mp_drawing_styles = mp.solutions.drawing_styles
 
-# Loading Haar cascade classifier for face detection
 face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
-
-# Initializing the laptop's camera with index 0
 video_cap = cv2.VideoCapture(0)
 
-# Initializing a canvas for drawing
-canvas = None
+if not video_cap.isOpened():
+    print("Error: Could not open video capture.")
+    exit()
 
-# Drawing state
+canvas = None
 drawing = False
 prev_x, prev_y = None, None
+brush_color = (0, 255, 0)
+brush_radius = 10  
+eraser_mode = False
 
-# Start the time for FPS calculation
-start_time = time.time()
-frame_count = 0
+# Color palette coordinates
+palette = {
+    'red': ((20, 20), (60, 60), (0, 0, 255)),
+    'green': ((80, 20), (120, 60), (0, 255, 0)),
+    'blue': ((140, 20), (180, 60), (255, 0, 0)),
+    'white': ((200, 20), (240, 60), (255, 255, 255)),
+    'yellow': ((260, 20), (300, 60), (0, 255, 255)),
+}
 
-# Setting the thresold for drawing in pixels (adjust this as needed)
-distance_threshold = 40 
+def count_fingers(hand_landmarks):
+    tips_ids = [4, 8, 12, 16, 20]
+    fingers = []
 
-# Calculating the Euclidean distance (shortest distance between two points.)
-def calculate_distance(x1, y1, x2, y2):
-    return math.sqrt((x2 - x1) ** 2 + (y2 - y1) ** 2)
+    # Thumb
+    if hand_landmarks.landmark[tips_ids[0]].x < hand_landmarks.landmark[tips_ids[0] - 1].x:
+        fingers.append(1)
+    else:
+        fingers.append(0)
+
+    # Other 4 fingers
+    for id in range(1, 5):
+        if hand_landmarks.landmark[tips_ids[id]].y < hand_landmarks.landmark[tips_ids[id] - 2].y:
+            fingers.append(1)
+        else:
+            fingers.append(0)
+
+    return fingers.count(1), fingers
+
+# Auto-create screenshot folder
+screenshot_folder = "screenshots"
+if not os.path.exists(screenshot_folder):
+    os.makedirs(screenshot_folder)
 
 while True:
-    # Capturing frame-by-frame
     ret, frame = video_cap.read()
-    frame_count += 1
-
-    # Checking the camera is accessible or not
     if not ret:
         print("Failed to grab frame")
         break
 
-    # Flip the frame horizontally(for a later selfie-view display)
     frame = cv2.flip(frame, 1)
-
-    # Initialize canvas if not initialized
     if canvas is None:
         canvas = np.zeros_like(frame)
 
-    # Converting the video to RGB 
     rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-
-    # Process the video to detect hands
     results = hands.process(rgb_frame)
-
-    # Converting the video to grayscale (required for face detection)
     gray_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
 
-    # Detect faces in the grayscale video
-    faces = face_cascade.detectMultiScale(
-        gray_frame,
-        scaleFactor=1.1,
-        minNeighbors=5,
-        minSize=(30, 30),
-        flags=cv2.CASCADE_SCALE_IMAGE
-    )
+    # Draw color palette
+    for name, (start, end, color) in palette.items():
+        cv2.rectangle(frame, start, end, color, -1)
+        cv2.rectangle(frame, start, end, (255, 255, 255), 2)
 
-    # Draw rectangles around detected faces
+    # Detect faces and draw rectangles
+    faces = face_cascade.detectMultiScale(gray_frame, scaleFactor=1.1, minNeighbors=5)
     for (x, y, w, h) in faces:
-        cv2.rectangle(frame, (x, y), (x + w, y + h), (255, 0, 0), 2)  # Blue color for faces
+        cv2.rectangle(frame, (x, y), (x + w, y + h), (255, 0, 0), 2)  
 
-    # Draw hand nodes/landmarks 
     if results.multi_hand_landmarks:
-        # If detected and use the index finger tip for drawing
         for hand_landmarks in results.multi_hand_landmarks:
-            mp_drawing.draw_landmarks(
-                frame,
-                hand_landmarks,
-                mp_hands.HAND_CONNECTIONS,
-                mp_drawing.DrawingSpec(color=(0, 0, 255), thickness=2, circle_radius=2),
-                mp_drawing.DrawingSpec(color=(0, 255, 0), thickness=2)  # Green color for connections
-            )
-            
-            # Get coordinates of the index finger tip (node/landmark 8) and middle finger tip (node/landmark 12)
+            mp_drawing.draw_landmarks(frame, hand_landmarks, mp_hands.HAND_CONNECTIONS)
+
             h, w, _ = frame.shape
-            index_finger_tip = hand_landmarks.landmark[mp_hands.HandLandmark.INDEX_FINGER_TIP]
-            middle_finger_tip = hand_landmarks.landmark[mp_hands.HandLandmark.MIDDLE_FINGER_TIP]
+            index = hand_landmarks.landmark[8]
+            middle = hand_landmarks.landmark[12]
+            thumb = hand_landmarks.landmark[4]
+            pinky = hand_landmarks.landmark[20]
 
-            cx_index, cy_index = int(index_finger_tip.x * w), int(index_finger_tip.y * h)
-            cx_middle, cy_middle = int(middle_finger_tip.x * w), int(middle_finger_tip.y * h)
+            cx_index, cy_index = int(index.x * w), int(index.y * h)
+            cx_thumb, cy_thumb = int(thumb.x * w), int(thumb.y * h)
+            cx_middle, cy_middle = int(middle.x * w), int(middle.y * h)
+            cx_pinky, cy_pinky = int(pinky.x * w), int(pinky.y * h)
 
-            # Calculating the Euclidean distance between the index finger tip and middle finger tip
-            distance = calculate_distance(cx_index, cy_index, cx_middle, cy_middle)
+            # Count fingers
+            count, fingers = count_fingers(hand_landmarks)
 
-            # Toggle drawing based on the distance between the fingers
-            if distance < distance_threshold:
-                #If index fingure and middle finger arre inn contact then no drawing
-                drawing = False
-            else:
+            # 🤙 Gesture: Screenshot (thumb and pinky only)
+            if fingers[0] and fingers[4] and not any(fingers[1:4]):
+                filename = os.path.join(screenshot_folder, f"screenshot_{int(time.time())}.png")
+                success = cv2.imwrite(filename, frame)
+                if success:
+                    print("✅ Screenshot saved at:", os.path.abspath(filename))
+                else:
+                    print("❌ Failed to save screenshot.")
+
+            # 👆 Select color/tool
+            elif count == 1:
+                for name, (start, end, color) in palette.items():
+                    if start[0] <= cx_index <= end[0] and start[1] <= cy_index <= end[1]:
+                        brush_color = color
+                        print(f"Color changed to {name}")
+                        break
+
+            # ✋ Eraser mode (all fingers up)
+            elif count == 5:
+                eraser_mode = True
                 drawing = True
 
-            # Draw if drawing mode is enabled
+            # ✌️ Drawing mode (index and middle fingers only)
+            elif fingers[1] and fingers[2] and not fingers[0] and not fingers[3] and not fingers[4]:
+                eraser_mode = False
+                drawing = True
+            else:
+                drawing = False
+
+            # Drawing or erasing
             if drawing:
                 if prev_x is not None and prev_y is not None:
-                    cv2.line(canvas, (prev_x, prev_y), (cx_index, cy_index), (0, 255, 0), 5)
+                    color = (0, 0, 0) if eraser_mode else brush_color
+                    thickness = brush_radius if not eraser_mode else 30  
+                    cv2.line(canvas, (prev_x, prev_y), (cx_index, cy_index), color, thickness)
                 prev_x, prev_y = cx_index, cy_index
             else:
                 prev_x, prev_y = None, None
 
-    # Overlay the canvas on the frame
+    # Merge canvas with live frame
     frame = cv2.add(frame, canvas)
 
-    # Display drawing mode status
-    cv2.putText(frame, f'Drawing Mode: {"ON" if drawing else "OFF"}', (10, 60),
-                cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0) if drawing else (0, 0, 255), 2)
+    # Show info
+    cv2.putText(frame, f'Mode: {"Eraser" if eraser_mode else "Draw"}', (10, 80),
+                cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255) if eraser_mode else (0, 255, 0), 2)
+    cv2.putText(frame, f'Brush Size: {brush_radius}', (10, 120),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 0), 2)
 
-    # Display the resulting frame with face rectangles, hand landmarks, and drawings
-    cv2.imshow("Multi-Face and Multi-Hand Detector with Drawing", frame)
-
-    # Check key presses to exit
-    key = cv2.waitKey(5) & 0xFF
+    # Show final output
+    cv2.imshow("Hand + Face Drawing App", frame)
+    key = cv2.waitKey(2) & 0xFF
     if key == ord('a'):
         break
+    elif key == ord('c'):
+        canvas = np.zeros_like(frame)
+        print("Canvas cleared.")
+    elif key == ord('s'):
+        filename = os.path.join(screenshot_folder, f"screenshot_{int(time.time())}.png")
+        success = cv2.imwrite(filename, frame)
+        if success:
+            print("✅ Screenshot saved at:", os.path.abspath(filename))
+        else:
+            print("❌ Failed to save screenshot.")
 
-# Release the video capture object and close all OpenCV windows
 video_cap.release()
 cv2.destroyAllWindows()
